@@ -1,0 +1,46 @@
+# =============================================================================
+# Bin Picking Vision 설정
+# =============================================================================
+# 모든 길이 단위: mm
+# 모든 좌표계: 카메라 좌표계 (Z축이 카메라 광축, +Z = 정면)
+
+camera:
+  # 카메라 타입 선택. (lucid_helios | 추후 추가)
+  type: lucid_helios
+
+  # 시리얼 번호. null이면 첫 번째 발견 카메라 사용.
+  serial: null
+
+  # ---- LUCID Helios 전용 옵션 ----
+  # Coord3D_ABCY16: X, Y, Z + Intensity (각 16-bit)
+  # 빈 피킹에서는 이 포맷을 쓰는 것이 표준 (LUCID 앱노트 기준).
+  pixel_format: Coord3D_ABCY16
+
+  # 노출 시간. 어두우면 길게, 모션블러 우려되면 짧게.
+  # 옵션: Exp62_5Us / Exp250Us / Exp1000Us
+  exposure_time_selector: Exp250Us
+
+  # 동작 거리 모드. 작업 영역에 맞춰 가장 짧은 것을 선택해야 정밀도가 올라감.
+  # 옵션 예: Distance1500mm / Distance3000mm / Distance4000mm / Distance5000mm / Distance6000mm
+  operating_mode: Distance1500mm
+
+  # 카메라 발견/캡처 타임아웃 (ms)
+  connect_timeout_ms: 5000
+  capture_timeout_ms: 2000
+  
+  valid_z_range_mm: [300.0, 900.0]
+
+# 빈(상자) 워크스페이스 영역 - 이 박스 밖의 점은 자동 제거됨
+# 카메라 좌표계 기준 (mm). 실제 셋업 후 조정 필요.
+workspace_bounds:
+  x_min: -300.0
+  x_max:  300.0
+  y_min: -300.0
+  y_max:  300.0
+  z_min:  300.0   # 카메라로부터 최소 거리
+  z_max: 1500.0   # 카메라로부터 최대 거리
+
+paths:
+  output_dir: ./data/captures
+  cad_models_dir: ./data/cad_models
+  detection_model: ./models/rtmdet_ins_best.pth  #  학습 후 채워짐

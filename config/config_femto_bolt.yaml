@@ -1,0 +1,38 @@
+# =============================================================================
+# Bin Picking Vision 설정 — Femto Bolt 버전
+# =============================================================================
+# 모든 길이 단위: mm
+# 모든 좌표계: depth 카메라 좌표계 (+Z = 광축 정면)
+camera:
+  # 카메라 타입 선택. (lucid_helios | femto_bolt)
+  type: femto_bolt
+  # 시리얼 번호. null이면 첫 번째 발견 카메라 사용.
+  serial: null
+  # ---- Femto Bolt 전용 옵션 ----
+  # depth·IR 스트림 해상도 (두 스트림은 동일 프로파일로 열림)
+  #   NFOV unbinned : 640 x 576  (동작거리 약 0.5 ~ 3.86 m)  ← 기본
+  #   NFOV 2x2 bin  : 320 x 288  (약 0.5 ~ 5.46 m)
+  #   WFOV binned   : 512 x 512  (약 0.25 ~ 2.5 m)  ← 0.5m 미만 근거리 작업 시
+  #   WFOV unbinned : 1024 x 1024 (최대 15fps)
+  # ※ 작업거리가 0.5m보다 가까우면 NFOV는 측정 불가 → WFOV 계열 사용
+  depth_width: 640
+  depth_height: 576
+  fps: 15
+  capture_timeout_ms: 2000
+  warmup_frames: 5
+  # 이 범위 밖 Z는 무효 처리 (mm). 실제 빈 거리에 맞춰 조정.
+  valid_z_range_mm: [300.0, 900.0]
+# 빈(상자) 워크스페이스 영역 - 이 박스 밖의 점은 자동 제거됨
+# ※ 카메라 교체 시 시야각(FoV)이 달라지므로 실측 후 재조정 필요
+#    Helios2: 69° x 51° / Femto Bolt NFOV: 75° x 65°, WFOV: 120° x 120°
+workspace_bounds:
+  x_min: -300.0
+  x_max:  300.0
+  y_min: -300.0
+  y_max:  300.0
+  z_min:  300.0
+  z_max: 1500.0
+paths:
+  output_dir: ./data/captures
+  cad_models_dir: ./data/cad_models
+  detection_model: ./models/rtmdet_ins_best.pth  #  학습 후 채워짐
