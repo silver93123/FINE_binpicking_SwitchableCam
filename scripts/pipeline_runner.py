@@ -123,6 +123,7 @@ class PipelineRunner(QThread):
         self._stop_requested = False
         self._server_sock: Optional[socket.socket] = None
         self._frame_idx = 0
+        self._log_file = None
 
     # ── 외부에서 호출 (MainWindow 쪽에서, "중지" 버튼) ─────────────
     def stop(self):
@@ -135,6 +136,35 @@ class PipelineRunner(QThread):
 
     def _log(self, msg: str, level: str = "INFO"):
         self.log_message.emit(msg, level)
+        if self._log_file is not None:
+            try:
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._log_file.write(f"[{ts}] [{level}] {msg}\n")
+                self._log_file.flush()
+            except Exception:
+                pass
+
+    def _open_log_file(self, out_dir: Path):
+        """out_dir/binpicking.log — 실제 로그 파일. UI의 '로그 파일 열기' 버튼이 이 파일을 엽니다."""
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            log_path = out_dir / "binpicking.log"
+            self._log_file = log_path.open("a", encoding="utf-8")
+            sep = "=" * 60
+            start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._log_file.write(f"\n{sep}\n  파이프라인 시작: {start}\n{sep}\n")
+            self._log_file.flush()
+        except Exception as e:
+            self.log_message.emit(f"로그 파일을 열 수 없습니다: {e}", "WARN")
+            self._log_file = None
+
+    def _close_log_file(self):
+        if self._log_file is not None:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
 
     # ── 스레드 진입점 ────────────────────────────────────────────
     def run(self):
@@ -143,10 +173,12 @@ class PipelineRunner(QThread):
         except Exception as e:
             self.error.emit(f"{type(e).__name__}: {e}")
         finally:
+            self._close_log_file()
             self.finished_ok.emit()
 
     def _run_impl(self):
         cfg = self.cfg
+        self._open_log_file(Path(cfg.out_dir))
         if cfg.cad_path is None or not Path(cfg.cad_path).exists():
             raise FileNotFoundError(f"CAD 파일을 찾을 수 없습니다: {cfg.cad_path}")
         if cfg.rtmdet_config is None or cfg.rtmdet_checkpoint is None:
@@ -206,7 +238,6 @@ class PipelineRunner(QThread):
                 break   # stop()에서 소켓을 닫은 경우
 
             self.client_status.emit(True, str(addr))
-            self._log(f"클라이언트 연결됨: {addr}", "OK")
             conn.settimeout(0.5)
 
             try:
@@ -222,7 +253,6 @@ class PipelineRunner(QThread):
             except socket.timeout:
                 continue
             if not cmd:
-                self._log("클라이언트 연결 끊김")
                 return
             self._log(f"수신: '{cmd}'")
 
@@ -307,7 +337,7 @@ class PipelineRunner(QThread):
 
         overlay = self._overlay_results(bgr, results, valid_mask)
 
-        out_dir = Path(cfg.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(cfg.out_dir) / "results"; out_dir.mkdir(parents=True, exist_ok=True)
         dt_name = datetime.now().strftime("%Y%m%d_%H%M%S")
         frame_name = f"result_{dt_name}"
 

@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QGroupBox, QFormLayout,
     QFileDialog, QSlider, QSplitter, QLineEdit,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QFont
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QUrl
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPainterPath, QFont, QDesktopServices
 
 # ── 백엔드 파이프라인 경로 ─────────────────────────────────────────
 # FINE_RTMDet_v2 프로젝트 루트 (src/camera, src/camera_profile 등이 위치한 곳).
@@ -373,6 +373,9 @@ class CameraWorker(QThread):
 # 타이틀 바
 # ══════════════════════════════════════════════════════════════════
 class TitleBar(QWidget):
+    open_results_requested = pyqtSignal()
+    open_log_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.setFixedHeight(48)
@@ -385,9 +388,16 @@ class TitleBar(QWidget):
         h.addWidget(logo); h.addStretch()
 
         status_w = QWidget(); status_w.setStyleSheet(f"background:{BG_WHITE};")
-        sv = QVBoxLayout(status_w); sv.setContentsMargins(10,4,10,4); sv.setSpacing(2)
-        sv.addWidget(self._lbl("현재 상태 표기 구역", f"color:{TEXT_SEC}; font-size:10px; font-weight:600;"))
-        sv.addWidget(self._lbl("(적용카메라, 아이피, 작동상태, 경고등)", f"color:{TEXT_DIM}; font-size:9px;"))
+        sv = QVBoxLayout(status_w); sv.setContentsMargins(10,4,10,4); sv.setSpacing(4)
+
+        btn_row = QWidget(); btn_row.setStyleSheet(f"background:{BG_WHITE};")
+        brh = QHBoxLayout(btn_row); brh.setContentsMargins(0,0,0,0); brh.setSpacing(6)
+        self.btn_open_results = _apply_btn("결과 폴더", TEXT_SEC); self.btn_open_results.setFixedHeight(20)
+        self.btn_open_log = _apply_btn("로그 파일", TEXT_SEC); self.btn_open_log.setFixedHeight(20)
+        self.btn_open_results.clicked.connect(self.open_results_requested.emit)
+        self.btn_open_log.clicked.connect(self.open_log_requested.emit)
+        brh.addStretch(); brh.addWidget(self.btn_open_results); brh.addWidget(self.btn_open_log)
+        sv.addWidget(btn_row)
 
         sh = QHBoxLayout(); sh.setContentsMargins(0,0,0,0); sh.setSpacing(8)
         self._ind = {}
@@ -416,7 +426,7 @@ class TitleBar(QWidget):
 # ══════════════════════════════════════════════════════════════════
 TAB_NAMES  = ["Run","Detection","Camera","Calibration","Pick Point","I/O","Setting"]
 SIDE_MENUS = [
-    [("파이프라인 시작",),("Step 실행",),("일시정지",),("중지",)],
+    [("파이프라인 시작",),("일시정지",),("중지",)],
     [("RTMDet 설정",),("신뢰도 임계값",),("클래스 선택",)],
     [("카메라 연결",),("카메라 연결 해제",),("캡쳐 테스트",)],
     [("Hand-Eye 방식",),("내부 파라미터",),("외부 파라미터",),("결과 저장/로드",)],
@@ -679,7 +689,7 @@ class CaptureTestPanel(QWidget):
 class PipelineMonitorPanel(QWidget):
     def __init__(self):
         super().__init__()
-        self.setStyleSheet("background:#1C1C1C;")
+        self.setStyleSheet(f"background:{BG_WHITE}; border-left:1px solid {BORDER_LT};")
         self.setFixedWidth(300)
         v = QVBoxLayout(self); v.setContentsMargins(14,12,14,12); v.setSpacing(0)
         self.text_lbl = QLabel()
@@ -687,14 +697,15 @@ class PipelineMonitorPanel(QWidget):
         self.text_lbl.setWordWrap(True)
         self.text_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.text_lbl.setStyleSheet(
-            "background:transparent; color:#DDDDDD;"
+            f"background:transparent; color:{TEXT_PRI};"
             " font-family:'D2Coding','Consolas','Monospace'; font-size:11px;")
         v.addWidget(self.text_lbl); v.addStretch()
         self.reset()
 
+    # 진한(고대비) 색상만 사용 — 옅은 회색/파스텔 톤 금지
     _STATUS_COLOR = {
-        "Waiting": "#999999", "Processing": "#33C6FF", "Done": "#28A745",
-        "No detection": "#4D9CFF", "Error": "#DC3545",
+        "Waiting": TEXT_PRI, "Processing": "#0077CC", "Done": SUCCESS,
+        "No detection": "#0B5AA8", "Error": DANGER,
     }
 
     def reset(self):
@@ -710,52 +721,53 @@ class PipelineMonitorPanel(QWidget):
 
     def _render(self, info: dict):
         status = info.get("status", "Waiting")
-        s_color = self._STATUS_COLOR.get(status, "#DDDDDD")
+        s_color = self._STATUS_COLOR.get(status, TEXT_PRI)
         picks = info.get("picks", [])
         num_det = info.get("num_detected", "-")
         num_ok = info.get("num_icp_ok", "-")
+        hdr = "#0B5AA8"     # 섹션 헤더 색 (진한 파랑, 흰 배경에서 고대비)
 
         rows = []
-        rows.append(f"<span style='color:#FFC107; font-weight:600;'>BinPicking Monitor</span>")
-        rows.append("<hr style='border:0.5px solid #444;'>")
-        rows.append("<span style='color:#66C6FF;'>[ Server Status ]</span>")
-        rows.append(f"&nbsp;&nbsp;Status&nbsp;: <span style='color:{s_color};'>{status}</span>")
+        rows.append(f"<span style='color:{BRAND}; font-weight:600;'>BinPicking Monitor</span>")
+        rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
+        rows.append(f"<span style='color:{hdr}; font-weight:600;'>[ Server Status ]</span>")
+        rows.append(f"&nbsp;&nbsp;Status&nbsp;: <span style='color:{s_color}; font-weight:600;'>{status}</span>")
         rows.append(f"&nbsp;&nbsp;Frame #&nbsp;: {info.get('frame_idx','-')}")
         rows.append(f"&nbsp;&nbsp;Time&nbsp;: {info.get('timestamp','-')}")
-        rows.append("<hr style='border:0.5px solid #333;'>")
-        rows.append("<span style='color:#66C6FF;'>[ Capture Info ]</span>")
+        rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
+        rows.append(f"<span style='color:{hdr}; font-weight:600;'>[ Capture Info ]</span>")
         rows.append(f"&nbsp;&nbsp;Capture&nbsp;: {info.get('capture_ms',0):.0f} ms")
         rows.append(f"&nbsp;&nbsp;Valid&nbsp;: {info.get('valid_ratio',0):.1f} %")
         rows.append(f"&nbsp;&nbsp;Z range&nbsp;: {info.get('z_min',0):.0f} ~ {info.get('z_max',0):.0f} mm")
-        rows.append("<hr style='border:0.5px solid #333;'>")
-        rows.append("<span style='color:#66C6FF;'>[ Timing ]</span>")
+        rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
+        rows.append(f"<span style='color:{hdr}; font-weight:600;'>[ Timing ]</span>")
         rows.append(f"&nbsp;&nbsp;Detection&nbsp;: {info.get('det_ms',0):.0f} ms")
         rows.append(f"&nbsp;&nbsp;ICP&nbsp;: {info.get('icp_ms',0):.0f} ms")
         total = info.get("capture_ms",0) + info.get("det_ms",0) + info.get("icp_ms",0)
-        rows.append(f"&nbsp;&nbsp;<span style='color:#FFC107;'>Total&nbsp;: {total:.0f} ms</span>")
-        rows.append("<hr style='border:0.5px solid #333;'>")
-        rows.append(f"<span style='color:#66C6FF;'>[ Results : ICP {num_ok} obj(s) ]</span>")
-        det_color = "#28A745" if isinstance(num_det, int) and num_det > 0 else "#777777"
-        rows.append(f"&nbsp;&nbsp;<span style='color:{det_color};'>RTMDet&nbsp;: {num_det} detected</span>")
-        ok_color = "#28A745" if isinstance(num_ok, int) and num_ok > 0 else "#DC3545"
-        rows.append(f"&nbsp;&nbsp;<span style='color:{ok_color};'>ICP OK&nbsp;: {num_ok} / {num_det}</span>")
-        rows.append("<hr style='border:0.5px solid #2A2A2A;'>")
+        rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI}; font-weight:700;'>Total&nbsp;: {total:.0f} ms</span>")
+        rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
+        rows.append(f"<span style='color:{hdr}; font-weight:600;'>[ Results : ICP {num_ok} obj(s) ]</span>")
+        det_color = SUCCESS if isinstance(num_det, int) and num_det > 0 else TEXT_PRI
+        rows.append(f"&nbsp;&nbsp;<span style='color:{det_color}; font-weight:600;'>RTMDet&nbsp;: {num_det} detected</span>")
+        ok_color = SUCCESS if isinstance(num_ok, int) and num_ok > 0 else DANGER
+        rows.append(f"&nbsp;&nbsp;<span style='color:{ok_color}; font-weight:600;'>ICP OK&nbsp;: {num_ok} / {num_det}</span>")
+        rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
 
         if not picks:
-            rows.append("&nbsp;&nbsp;<span style='color:#4D6FDC;'>No objects detected</span>")
+            rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI};'>No objects detected</span>")
         else:
-            palette = ["#FF3232", "#32C832", "#3264FF", "#1EB4FF", "#E632B4", "#C8C81E"]
+            palette = ["#B3261E", "#1E7A34", "#1A4FCC", "#0E7C9E", "#8E1A6E", "#7A6A00"]
             for i, pk in enumerate(picks):
                 pp, deg, fit = pk["position_mm"], pk["approach_deg"], pk["icp_fitness"]
                 ci = palette[i % len(palette)]
-                fc = "#28A745" if fit >= 0.7 else "#FF9C1E" if fit >= 0.5 else "#DC3545"
-                rows.append("<hr style='border:0.5px solid #2A2A2A;'>")
-                rows.append(f"&nbsp;<span style='color:{ci}; font-weight:600;'>Obj #{i}</span>")
-                rows.append(f"&nbsp;&nbsp;X= {pp[0]:+8.2f}  Y= {pp[1]:+8.2f}")
-                rows.append(f"&nbsp;&nbsp;Z= {pp[2]:+8.2f} mm")
-                rows.append(f"&nbsp;&nbsp;R= {deg['roll_deg']:+7.2f}  P= {deg['pitch_deg']:+7.2f}")
-                rows.append(f"&nbsp;&nbsp;Yaw= {deg['yaw_deg']:+7.2f} deg")
-                rows.append(f"&nbsp;&nbsp;<span style='color:{fc};'>ICP fit&nbsp;: {fit:.3f}</span>")
+                fc = SUCCESS if fit >= 0.7 else "#B36B00" if fit >= 0.5 else DANGER
+                rows.append(f"<hr style='border:0.5px solid {BORDER_LT};'>")
+                rows.append(f"&nbsp;<span style='color:{ci}; font-weight:700;'>Obj #{i}</span>")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI};'>X= {pp[0]:+8.2f}  Y= {pp[1]:+8.2f}</span>")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI};'>Z= {pp[2]:+8.2f} mm</span>")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI};'>R= {deg['roll_deg']:+7.2f}  P= {deg['pitch_deg']:+7.2f}</span>")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{TEXT_PRI};'>Yaw= {deg['yaw_deg']:+7.2f} deg</span>")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{fc}; font-weight:600;'>ICP fit&nbsp;: {fit:.3f}</span>")
 
         self.text_lbl.setText("<br>".join(rows))
 
@@ -769,16 +781,6 @@ class RunPage(QWidget):
         bar = QWidget(); bar.setFixedHeight(32)
         bar.setStyleSheet(f"background:{BG_HEADER}; border-bottom:1px solid {BORDER_LT};")
         bh = QHBoxLayout(bar); bh.setContentsMargins(8,0,8,0); bh.setSpacing(6)
-        for label in ["원본","검출 결과","깊이맵","포인트 클라우드"]:
-            b = QPushButton(label); b.setFixedHeight(24); b.setMinimumWidth(72)
-            b.setCheckable(True); b.setChecked(label == "검출 결과")
-            b.setStyleSheet(f"""
-                QPushButton {{ background:{BG_BTN}; color:{TEXT_SEC};
-                    border:1px solid {BORDER_LT}; border-radius:3px;
-                    font-size:10px; padding:0 8px; }}
-                QPushButton:checked {{ background:{BRAND}22; color:{BRAND}; border-color:{BRAND}; }}
-                QPushButton:hover {{ background:{BG_HOVER}; color:{BRAND}; }}
-            """); bh.addWidget(b)
         bh.addStretch()
         self.status_lbl = QLabel("대기 중 — 파이프라인이 시작되면 모니터가 표시됩니다.")
         self.status_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
@@ -1855,6 +1857,9 @@ class PickPointPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "CAD 파일 선택", "",
                                               "Mesh/PointCloud (*.ply *.stl *.obj);;모든 파일 (*)")
         if not path: return
+        self._load_cad_from_path(path)
+
+    def _load_cad_from_path(self, path: str):
         fname = os.path.basename(path)
         self.status_lbl.setText(f"'{fname}'  읽는 중..."); QApplication.processEvents()
         try:
@@ -1993,6 +1998,24 @@ class PickPointPage(QWidget):
                 "PICK_OFFSET_Z_MM":round(self.sp_oz.value(),2),
                 "cad_path": getattr(self, "cad_path", None)}
 
+    def set_config(self, cfg: dict):
+        """마지막으로 저장된 설정 복원 (앱 시작 시 자동 호출)."""
+        if not cfg:
+            return
+        cad_path = cfg.get("cad_path")
+        if cad_path and os.path.exists(cad_path):
+            self._load_cad_from_path(cad_path)
+        if "PICK_OFFSET_X_MM" in cfg: self.sp_ox.setValue(cfg["PICK_OFFSET_X_MM"])
+        if "PICK_OFFSET_Y_MM" in cfg: self.sp_oy.setValue(cfg["PICK_OFFSET_Y_MM"])
+        if "PICK_OFFSET_Z_MM" in cfg: self.sp_oz.setValue(cfg["PICK_OFFSET_Z_MM"])
+        pick_local = cfg.get("CAD_PICK_LOCAL")
+        if pick_local and len(pick_local) >= 3:
+            x_mm, y_mm, z_mm = pick_local[0]*1000, pick_local[1]*1000, pick_local[2]*1000
+            for sp, v in zip((self.sp_lx, self.sp_ly, self.sp_lz), (x_mm, y_mm, z_mm)):
+                sp.blockSignals(True); sp.setValue(v); sp.blockSignals(False)
+            self._refresh_local_disp(x_mm, y_mm, z_mm)
+            self.viewer.set_pick_pos_mm(x_mm, y_mm, z_mm)
+
 
 # ══════════════════════════════════════════════════════════════════
 # 중앙 스택
@@ -2074,6 +2097,7 @@ class MainWindow(QMainWindow):
         self.pipeline_runner = None
         self._build_ui()
         self.bridge = UIBridge(self); self.bridge.connect_signals()
+        self._load_persisted_config()
 
         if _PIPELINE_RUNNER_AVAILABLE:
             self.log.push("pipeline_runner.py 로드 완료.", "OK")
@@ -2101,6 +2125,8 @@ class MainWindow(QMainWindow):
         root_v = QVBoxLayout(root_w); root_v.setContentsMargins(0,0,0,0); root_v.setSpacing(0)
 
         self.title_bar = TitleBar(); root_v.addWidget(self.title_bar); root_v.addWidget(hline())
+        self.title_bar.open_results_requested.connect(self._on_open_results_folder)
+        self.title_bar.open_log_requested.connect(self._on_open_log_file)
         self.sub_bar = SubToolBar(); root_v.addWidget(self.sub_bar); root_v.addWidget(hline())
 
         body_h = QHBoxLayout(); body_h.setContentsMargins(0,0,0,0); body_h.setSpacing(0)
@@ -2140,7 +2166,6 @@ class MainWindow(QMainWindow):
         run_page = self.side.stack.widget(0)
         action_map = {
             "파이프라인 시작": self._on_run,
-            "Step 실행": self._on_step,
             "일시정지": self._on_pause,
             "중지": self._on_stop,
         }
@@ -2183,6 +2208,8 @@ class MainWindow(QMainWindow):
             self.log.push("Pick Point 탭에서 CAD 파일을 먼저 불러와주세요.", "ERR")
             return
 
+        self._persist_config()   # 마지막 적용 상태 저장 (다음 실행 시 자동 복원)
+
         cfg = PipelineConfig(
             camera_cfg=camera_cfg,
             rtmdet_config=det["rtmdet_config"],
@@ -2221,7 +2248,6 @@ class MainWindow(QMainWindow):
         self.pipeline_runner.finished_ok.connect(self._on_pipeline_finished)
         self.pipeline_runner.start()
 
-    def _on_step(self): self.log.push("Step 실행 요청 (미구현 — 파이프라인은 로봇의 'C' 명령으로 동작)", "INFO")
     def _on_pause(self): self.log.push("일시정지 요청 (미구현)", "INFO")
 
     def _on_stop(self):
@@ -2245,6 +2271,7 @@ class MainWindow(QMainWindow):
             f"Detection 설정 적용: score≥{d.get('score_threshold')}  "
             f"ICP fitness≥{d.get('icp_fitness_threshold')}  device={d.get('device')}", "OK"
         )
+        self._persist_config()
 
     def _on_pipeline_result(self, info: dict):
         self.center.run_page.show_result(info)
@@ -2255,9 +2282,9 @@ class MainWindow(QMainWindow):
     def _on_pipeline_client_status(self, connected: bool, addr: str):
         self.title_bar.set_indicator("IP", connected)
         if connected:
-            self.log.push(f"로봇 클라이언트 연결됨: {addr}", "OK")
+            self.log.push(f"클라이언트 연결됨: {addr}", "OK")
         else:
-            self.log.push("로봇 클라이언트 연결 끊김", "INFO")
+            self.log.push("클라이언트 연결 해제", "INFO")
 
     def _on_pipeline_error(self, msg: str):
         self.log.push(f"파이프라인 오류: {msg}", "ERR")
@@ -2276,6 +2303,7 @@ class MainWindow(QMainWindow):
             f"깊이 {cam.get('depth_min_mm')}~{cam.get('depth_max_mm')}mm  "
             f"노출 {cam.get('exposure_us')}μs", "OK"
         )
+        self._persist_config()
 
     def _on_open_capture_test(self):
         self.center.cam_page.show_capture_view()
@@ -2373,6 +2401,46 @@ class MainWindow(QMainWindow):
 
     def on_pipeline_finished(self):
         self.log.push("파이프라인 완료.", "OK"); self._set_idle()
+
+    # ── 타이틀바: 결과 폴더 / 로그 파일 열기 ──────────────────────
+    def _on_open_results_folder(self):
+        path = os.path.join(BACKEND_ROOT, "data", "captures", "live", "results")
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+            self.log.push(f"결과 폴더가 없어 새로 생성했습니다: {path}", "WARN")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self.log.push(f"결과 폴더 열기: {path}", "INFO")
+
+    def _on_open_log_file(self):
+        path = os.path.join(BACKEND_ROOT, "data", "captures", "live", "binpicking.log")
+        if not os.path.exists(path):
+            self.log.push(f"로그 파일이 아직 없습니다 (파이프라인을 한 번 이상 실행해야 생성됩니다): {path}", "WARN")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self.log.push(f"로그 파일 열기: {path}", "INFO")
+
+    # ── 마지막 적용 상태 저장/복원 (config/config.yaml, BENIROBO 폴더 기준) ──
+    def _persist_config(self):
+        combined = {
+            "camera": self.center.cam_page.get_config().get("camera", {}),
+            "detection": self.center.detection_page.get_config().get("detection", {}),
+            "pick_point": self.center.pick_page.get_config(),
+        }
+        self.bridge.save_config(combined)
+
+    def _load_persisted_config(self):
+        cfg = self.bridge.load_config()
+        if not cfg:
+            return
+        if "camera" in cfg:
+            self.center.cam_page.set_config(cfg)
+            self.applied_camera_config = {"camera": cfg["camera"]}
+        if "detection" in cfg:
+            self.center.detection_page.set_config(cfg)
+            self.applied_detection_config = {"detection": cfg["detection"]}
+        if "pick_point" in cfg:
+            self.center.pick_page.set_config(cfg["pick_point"])
+        self.log.push("마지막 적용 상태를 복원했습니다.", "INFO")
 
     def closeEvent(self, event):
         if self.cam_connected:

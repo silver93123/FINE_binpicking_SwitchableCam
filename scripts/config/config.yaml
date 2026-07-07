@@ -1,0 +1,31 @@
+camera:
+  depth_max_mm: 5000
+  depth_min_mm: 500
+  exposure_us: 8000
+  model: Orbbec Femto Bolt
+  resolution: 1280×720
+detection:
+  device: cuda:0
+  icp_fitness_threshold: 0.5
+  mask_iou_threshold: 0.6
+  min_points_per_instance: 100
+  outlier_nb_neighbors: 20
+  outlier_std_ratio: 1.5
+  rtmdet_checkpoint: /home/silver/binpicking_vision/FINE_RTMDet_v2/work_dirs/rtmdet-ins_bracket_v1/best_coco_bbox_mAP_epoch_50.pth
+  rtmdet_config: /home/silver/binpicking_vision/FINE_RTMDet_v2/configs/rtmdet-ins_bracket.py
+  score_threshold: 0.3
+  tcp_host: 0.0.0.0
+  tcp_port: 29999
+  voxel_size_cad_mm: 2.0
+  voxel_size_scene_mm: 3.0
+  xyz_max_mm: 2000
+pick_point:
+  CAD_PICK_LOCAL:
+  - -0.01306
+  - 0.00629
+  - 0.01703
+  - 1.0
+  PICK_OFFSET_X_MM: 0.0
+  PICK_OFFSET_Y_MM: 0.0
+  PICK_OFFSET_Z_MM: 30.0
+  cad_path: /home/silver/binpicking_vision/FINE_RTMDet_v2/data/cad/bracket_v2.stl
