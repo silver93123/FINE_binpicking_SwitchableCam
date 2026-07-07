@@ -28,7 +28,7 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
 try:
-    from scripts.PipelineRunner import PipelineRunner, PipelineConfig
+    from pipeline_runner import PipelineRunner, PipelineConfig
     _PIPELINE_RUNNER_AVAILABLE = True
     _PIPELINE_RUNNER_IMPORT_ERROR = None
 except ImportError as _e:
@@ -138,12 +138,6 @@ class UIBridge:
         self.win = win; self.runner = None
 
     def connect_signals(self): pass
-
-    def start_pipeline(self):
-        self.win.log.push("UIBridge: PipelineRunner 미연결 — 스텁 실행", "WARN")
-
-    def stop_pipeline(self):
-        self.win.log.push("UIBridge: 파이프라인 중지 요청", "INFO")
 
     def load_config(self) -> dict:
         cfg_path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
@@ -1882,7 +1876,6 @@ class LogPanel(QWidget):
         """)
         clr.clicked.connect(self.log_box.clear); v.addWidget(self.log_box)
         self.push("시스템 초기화 완료.", "INFO")
-        self.push("UIBridge 대기 중 — PipelineRunner 미연결.", "WARN")
 
     def push(self, msg: str, level: str = "INFO"):
         col = {"INFO":TEXT_SEC,"OK":SUCCESS,"WARN":WARN,"ERR":DANGER}.get(level, TEXT_SEC)
@@ -1910,6 +1903,13 @@ class MainWindow(QMainWindow):
         self.pipeline_runner = None
         self._build_ui()
         self.bridge = UIBridge(self); self.bridge.connect_signals()
+
+        if _PIPELINE_RUNNER_AVAILABLE:
+            self.log.push("pipeline_runner.py 로드 완료.", "OK")
+        else:
+            self.log.push(
+                f"pipeline_runner.py를 불러올 수 없습니다: {_PIPELINE_RUNNER_IMPORT_ERROR}  "
+                f"(vision_ui.py와 같은 폴더에 pipeline_runner.py 파일이 있는지 확인하세요)", "ERR")
 
         # 카메라 세션 워커 — 앱 실행 중 계속 살아있으며, 연결 요청이 올 때만 실제로 연결
         self.cam_worker = CameraWorker()
