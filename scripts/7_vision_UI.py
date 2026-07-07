@@ -416,9 +416,9 @@ class TitleBar(QWidget):
 # ══════════════════════════════════════════════════════════════════
 TAB_NAMES  = ["Run","Detection","Camera","Calibration","Pick Point","I/O","Setting"]
 SIDE_MENUS = [
-    [("카메라 연결",),("카메라 연결 해제",),("파이프라인 시작",),("Step 실행",),("일시정지",),("중지",)],
+    [("파이프라인 시작",),("Step 실행",),("일시정지",),("중지",)],
     [("RTMDet 설정",),("신뢰도 임계값",),("클래스 선택",)],
-    [("해상도",),("FPS",),("노출값",),("드라이버 교체",)],
+    [("카메라 연결",),("카메라 연결 해제",),("캡쳐 테스트",)],
     [("Hand-Eye 방식",),("내부 파라미터",),("외부 파라미터",),("결과 저장/로드",)],
     [("그립 포인트 지정",),("오프셋 설정",),("후보 랭킹",),("JSON 저장/로드",)],
     [("포트 설정",),("TCP 주소",),("메세지 포맷",)],
@@ -488,6 +488,7 @@ class SidePanel(QWidget):
         self.stack = QStackedWidget(); self.stack.setStyleSheet("background:transparent;")
         self.cam_connect_btn = None
         self.cam_disconnect_btn = None
+        self.capture_test_btn = None
         for items in SIDE_MENUS:
             page = QWidget(); page.setStyleSheet("background:transparent;")
             pv = QVBoxLayout(page); pv.setContentsMargins(0,4,0,4); pv.setSpacing(0)
@@ -514,6 +515,8 @@ class SidePanel(QWidget):
                 elif item == "카메라 연결 해제":
                     self.cam_disconnect_btn = btn
                     btn.setEnabled(False)   # 연결 전에는 비활성
+                elif item == "캡쳐 테스트":
+                    self.capture_test_btn = btn
             pv.addStretch(); self.stack.addWidget(page)
         v.addWidget(self.stack)
 
@@ -580,7 +583,12 @@ class PointCloudPreview(QWidget):
 # ══════════════════════════════════════════════════════════════════
 # Run 탭
 # ══════════════════════════════════════════════════════════════════
-class RunPage(QWidget):
+# ══════════════════════════════════════════════════════════════════
+# 캡쳐 테스트 패널 (Camera 탭 전용) — IR / 포인트클라우드 분할 뷰
+# ══════════════════════════════════════════════════════════════════
+class CaptureTestPanel(QWidget):
+    capture_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet(f"background:{BG_CANVAS};")
@@ -588,35 +596,25 @@ class RunPage(QWidget):
 
         bar = QWidget(); bar.setFixedHeight(32)
         bar.setStyleSheet(f"background:{BG_HEADER}; border-bottom:1px solid {BORDER_LT};")
-        bh = QHBoxLayout(bar); bh.setContentsMargins(8,0,8,0); bh.setSpacing(6)
-        for label in ["원본","검출 결과","깊이맵","포인트 클라우드"]:
-            b = QPushButton(label); b.setFixedHeight(24); b.setMinimumWidth(72)
-            b.setCheckable(True); b.setChecked(label == "검출 결과")
-            b.setStyleSheet(f"""
-                QPushButton {{ background:{BG_BTN}; color:{TEXT_SEC};
-                    border:1px solid {BORDER_LT}; border-radius:3px;
-                    font-size:10px; padding:0 8px; }}
-                QPushButton:checked {{ background:{BRAND}22; color:{BRAND}; border-color:{BRAND}; }}
-                QPushButton:hover {{ background:{BG_HOVER}; color:{BRAND}; }}
-            """); bh.addWidget(b)
-        bh.addWidget(vline())
+        bh = QHBoxLayout(bar); bh.setContentsMargins(8,0,8,0); bh.setSpacing(8)
+        lbl = QLabel("캡쳐 테스트"); lbl.setStyleSheet(f"color:{TEXT_SEC}; font-size:10px; font-weight:600;")
+        bh.addWidget(lbl); bh.addWidget(vline())
 
-        # 카메라 연결/해제는 좌측 사이드 패널로 이동. 여기서는 "연결된 상태"에서의 단순 캡쳐만 담당.
-        self.btn_cam_test = _apply_btn("캡쳐 (IR + PCD)", BRAND)
-        self.btn_cam_test.setFixedHeight(24)
-        self.btn_cam_test.setEnabled(False)   # 카메라 연결 후 활성화
-        bh.addWidget(self.btn_cam_test)
+        self.btn_capture = _apply_btn("캡쳐 (IR + PCD)", BRAND)
+        self.btn_capture.setFixedHeight(24)
+        self.btn_capture.setEnabled(False)   # 카메라 연결 후 활성화
+        self.btn_capture.clicked.connect(self.capture_requested.emit)
+        bh.addWidget(self.btn_capture)
 
         self.conn_lbl = QLabel("● 카메라 미연결")
         self.conn_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px; font-weight:600;")
         bh.addWidget(self.conn_lbl)
 
         bh.addStretch()
-        self.info_lbl = QLabel("객체: —   신뢰도: —   포즈: —   fit: —")
-        self.info_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
-        bh.addWidget(self.info_lbl); v.addWidget(bar)
+        self.stats_lbl = QLabel("—")
+        self.stats_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
+        bh.addWidget(self.stats_lbl); v.addWidget(bar)
 
-        # ── 좌(IR) / 우(포인트클라우드) 분할 영상 영역 ─────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setStyleSheet(f"QSplitter::handle {{ background:{BORDER_LT}; }}")
 
@@ -652,9 +650,9 @@ class RunPage(QWidget):
         else:
             self.conn_lbl.setText("● 카메라 미연결")
             self.conn_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px; font-weight:600;")
-        self.btn_cam_test.setEnabled(connected)
+        self.btn_capture.setEnabled(connected)
 
-    def show_image(self, path: str):
+    def show_ir_image(self, path: str):
         if not path or not os.path.exists(path): return
         pix = QPixmap(path)
         if pix.isNull(): return
@@ -665,23 +663,174 @@ class RunPage(QWidget):
     def show_pointcloud(self, points_mm):
         self.pc_view.set_points(points_mm)
 
-    def show_result(self, result: dict):
-        cls = result.get("class","—"); score = result.get("score","—")
-        fitness = result.get("fitness","—"); tcp = result.get("tcp",[])
-        tcp_str = f"[{', '.join(f'{v:.1f}' for v in tcp)}]" if tcp else "—"
-        score_s = f"{score:.2f}" if isinstance(score, float) else str(score)
-        fit_s   = f"{fitness:.4f}" if isinstance(fitness, float) else str(fitness)
-        self.info_lbl.setText(f"객체: {cls}   신뢰도: {score_s}   TCP: {tcp_str}   fit: {fit_s}")
-        self.info_lbl.setStyleSheet(f"color:{TEXT_PRI}; font-size:10px;")
-
-    def show_camera_test_stats(self, data: dict):
+    def show_capture_stats(self, data: dict):
         pct = 100.0 * data["valid"] / data["total"] if data["total"] else 0.0
-        self.info_lbl.setText(
-            f"캡쳐   {data['width']}×{data['height']}   "
-            f"유효포인트: {data['valid']}/{data['total']} ({pct:.1f}%)   "
-            f"Z: {data['z_min']:.0f}~{data['z_max']:.0f}mm (중앙값 {data['z_med']:.0f})"
+        self.stats_lbl.setText(
+            f"{data['width']}×{data['height']}   유효 {data['valid']}/{data['total']} ({pct:.1f}%)   "
+            f"Z {data['z_min']:.0f}~{data['z_max']:.0f}mm"
         )
-        self.info_lbl.setStyleSheet(f"color:{SUCCESS}; font-size:10px; font-weight:600;")
+        self.stats_lbl.setStyleSheet(f"color:{SUCCESS}; font-size:10px; font-weight:600;")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 파이프라인 모니터 패널 (Run 탭 전용) — 6_Run_binpicking_TCP_UI.py의
+# cv2 모니터 창(overlay + 정보 패널)을 Qt로 재현
+# ══════════════════════════════════════════════════════════════════
+class PipelineMonitorPanel(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet("background:#1C1C1C;")
+        self.setFixedWidth(300)
+        v = QVBoxLayout(self); v.setContentsMargins(14,12,14,12); v.setSpacing(0)
+        self.text_lbl = QLabel()
+        self.text_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.text_lbl.setWordWrap(True)
+        self.text_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.text_lbl.setStyleSheet(
+            "background:transparent; color:#DDDDDD;"
+            " font-family:'D2Coding','Consolas','Monospace'; font-size:11px;")
+        v.addWidget(self.text_lbl); v.addStretch()
+        self.reset()
+
+    _STATUS_COLOR = {
+        "Waiting": "#999999", "Processing": "#33C6FF", "Done": "#28A745",
+        "No detection": "#4D9CFF", "Error": "#DC3545",
+    }
+
+    def reset(self):
+        self.set_status_only("Waiting")
+
+    def set_status_only(self, status: str):
+        self._render({"status": status, "frame_idx": "-", "timestamp": "-",
+                      "capture_ms": 0, "valid_ratio": 0, "z_min": 0, "z_max": 0,
+                      "det_ms": 0, "icp_ms": 0, "num_detected": "-", "num_icp_ok": "-", "picks": []})
+
+    def update_info(self, info: dict):
+        self._render(info)
+
+    def _render(self, info: dict):
+        status = info.get("status", "Waiting")
+        s_color = self._STATUS_COLOR.get(status, "#DDDDDD")
+        picks = info.get("picks", [])
+        num_det = info.get("num_detected", "-")
+        num_ok = info.get("num_icp_ok", "-")
+
+        rows = []
+        rows.append(f"<span style='color:#FFC107; font-weight:600;'>BinPicking Monitor</span>")
+        rows.append("<hr style='border:0.5px solid #444;'>")
+        rows.append("<span style='color:#66C6FF;'>[ Server Status ]</span>")
+        rows.append(f"&nbsp;&nbsp;Status&nbsp;: <span style='color:{s_color};'>{status}</span>")
+        rows.append(f"&nbsp;&nbsp;Frame #&nbsp;: {info.get('frame_idx','-')}")
+        rows.append(f"&nbsp;&nbsp;Time&nbsp;: {info.get('timestamp','-')}")
+        rows.append("<hr style='border:0.5px solid #333;'>")
+        rows.append("<span style='color:#66C6FF;'>[ Capture Info ]</span>")
+        rows.append(f"&nbsp;&nbsp;Capture&nbsp;: {info.get('capture_ms',0):.0f} ms")
+        rows.append(f"&nbsp;&nbsp;Valid&nbsp;: {info.get('valid_ratio',0):.1f} %")
+        rows.append(f"&nbsp;&nbsp;Z range&nbsp;: {info.get('z_min',0):.0f} ~ {info.get('z_max',0):.0f} mm")
+        rows.append("<hr style='border:0.5px solid #333;'>")
+        rows.append("<span style='color:#66C6FF;'>[ Timing ]</span>")
+        rows.append(f"&nbsp;&nbsp;Detection&nbsp;: {info.get('det_ms',0):.0f} ms")
+        rows.append(f"&nbsp;&nbsp;ICP&nbsp;: {info.get('icp_ms',0):.0f} ms")
+        total = info.get("capture_ms",0) + info.get("det_ms",0) + info.get("icp_ms",0)
+        rows.append(f"&nbsp;&nbsp;<span style='color:#FFC107;'>Total&nbsp;: {total:.0f} ms</span>")
+        rows.append("<hr style='border:0.5px solid #333;'>")
+        rows.append(f"<span style='color:#66C6FF;'>[ Results : ICP {num_ok} obj(s) ]</span>")
+        det_color = "#28A745" if isinstance(num_det, int) and num_det > 0 else "#777777"
+        rows.append(f"&nbsp;&nbsp;<span style='color:{det_color};'>RTMDet&nbsp;: {num_det} detected</span>")
+        ok_color = "#28A745" if isinstance(num_ok, int) and num_ok > 0 else "#DC3545"
+        rows.append(f"&nbsp;&nbsp;<span style='color:{ok_color};'>ICP OK&nbsp;: {num_ok} / {num_det}</span>")
+        rows.append("<hr style='border:0.5px solid #2A2A2A;'>")
+
+        if not picks:
+            rows.append("&nbsp;&nbsp;<span style='color:#4D6FDC;'>No objects detected</span>")
+        else:
+            palette = ["#FF3232", "#32C832", "#3264FF", "#1EB4FF", "#E632B4", "#C8C81E"]
+            for i, pk in enumerate(picks):
+                pp, deg, fit = pk["position_mm"], pk["approach_deg"], pk["icp_fitness"]
+                ci = palette[i % len(palette)]
+                fc = "#28A745" if fit >= 0.7 else "#FF9C1E" if fit >= 0.5 else "#DC3545"
+                rows.append("<hr style='border:0.5px solid #2A2A2A;'>")
+                rows.append(f"&nbsp;<span style='color:{ci}; font-weight:600;'>Obj #{i}</span>")
+                rows.append(f"&nbsp;&nbsp;X= {pp[0]:+8.2f}  Y= {pp[1]:+8.2f}")
+                rows.append(f"&nbsp;&nbsp;Z= {pp[2]:+8.2f} mm")
+                rows.append(f"&nbsp;&nbsp;R= {deg['roll_deg']:+7.2f}  P= {deg['pitch_deg']:+7.2f}")
+                rows.append(f"&nbsp;&nbsp;Yaw= {deg['yaw_deg']:+7.2f} deg")
+                rows.append(f"&nbsp;&nbsp;<span style='color:{fc};'>ICP fit&nbsp;: {fit:.3f}</span>")
+
+        self.text_lbl.setText("<br>".join(rows))
+
+
+class RunPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"background:{BG_CANVAS};")
+        v = QVBoxLayout(self); v.setContentsMargins(0,0,0,0); v.setSpacing(0)
+
+        bar = QWidget(); bar.setFixedHeight(32)
+        bar.setStyleSheet(f"background:{BG_HEADER}; border-bottom:1px solid {BORDER_LT};")
+        bh = QHBoxLayout(bar); bh.setContentsMargins(8,0,8,0); bh.setSpacing(6)
+        for label in ["원본","검출 결과","깊이맵","포인트 클라우드"]:
+            b = QPushButton(label); b.setFixedHeight(24); b.setMinimumWidth(72)
+            b.setCheckable(True); b.setChecked(label == "검출 결과")
+            b.setStyleSheet(f"""
+                QPushButton {{ background:{BG_BTN}; color:{TEXT_SEC};
+                    border:1px solid {BORDER_LT}; border-radius:3px;
+                    font-size:10px; padding:0 8px; }}
+                QPushButton:checked {{ background:{BRAND}22; color:{BRAND}; border-color:{BRAND}; }}
+                QPushButton:hover {{ background:{BG_HOVER}; color:{BRAND}; }}
+            """); bh.addWidget(b)
+        bh.addStretch()
+        self.status_lbl = QLabel("대기 중 — 파이프라인이 시작되면 모니터가 표시됩니다.")
+        self.status_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
+        bh.addWidget(self.status_lbl); v.addWidget(bar)
+
+        # ── 콘텐츠 스택: 0=빈 화면(대기), 1=파이프라인 모니터 ──────
+        self.stack = QStackedWidget()
+
+        self.blank_page = QLabel("파이프라인이 시작되면\n실시간 모니터가 여기에 표시됩니다.")
+        self.blank_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.blank_page.setStyleSheet(f"background:{BG_CANVAS}; color:{TEXT_DIM}; font-size:14px;")
+        self.stack.addWidget(self.blank_page)   # index 0
+
+        monitor_page = QWidget(); monitor_page.setStyleSheet(f"background:{BG_CANVAS};")
+        mh = QHBoxLayout(monitor_page); mh.setContentsMargins(0,0,0,0); mh.setSpacing(0)
+        self.overlay_lbl = QLabel("오버레이 이미지 없음")
+        self.overlay_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.overlay_lbl.setStyleSheet(f"background:{BG_CANVAS}; color:{TEXT_DIM}; font-size:13px;")
+        self.overlay_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.monitor_panel = PipelineMonitorPanel()
+        mh.addWidget(self.overlay_lbl, stretch=1); mh.addWidget(vline()); mh.addWidget(self.monitor_panel)
+        self.stack.addWidget(monitor_page)   # index 1
+
+        v.addWidget(self.stack, stretch=1)
+
+    # ── 대기/모니터 화면 전환 ────────────────────────────────────
+    def show_blank_view(self):
+        self.stack.setCurrentIndex(0)
+        self.status_lbl.setText("대기 중 — 파이프라인이 시작되면 모니터가 표시됩니다.")
+        self.status_lbl.setStyleSheet(f"color:{TEXT_DIM}; font-size:10px;")
+        self.overlay_lbl.setText("오버레이 이미지 없음")
+        self.overlay_lbl.setPixmap(QPixmap())
+        self.monitor_panel.reset()
+
+    def show_monitor_view(self):
+        self.stack.setCurrentIndex(1)
+        self.status_lbl.setText("● 파이프라인 실행 중")
+        self.status_lbl.setStyleSheet(f"color:{DANGER}; font-size:10px; font-weight:600;")
+
+    def set_processing(self, frame_idx: int):
+        self.monitor_panel.set_status_only("Processing")
+
+    def show_image(self, path: str):
+        if not path or not os.path.exists(path): return
+        pix = QPixmap(path)
+        if pix.isNull(): return
+        self.overlay_lbl.setPixmap(pix.scaled(self.overlay_lbl.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def show_result(self, info: dict):
+        self.monitor_panel.update_info(info)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -735,7 +884,16 @@ class CameraPage(QWidget):
         bh = QHBoxLayout(bar); bh.setContentsMargins(10,0,10,0)
         lbl = QLabel("Camera  설정 화면")
         lbl.setStyleSheet(f"color:{TEXT_SEC}; font-size:10px; font-weight:600;")
-        bh.addWidget(lbl); bh.addStretch(); root.addWidget(bar)
+        bh.addWidget(lbl); bh.addStretch()
+        self.btn_back_to_settings = _apply_btn("⚙ 설정으로", TEXT_DIM)
+        self.btn_back_to_settings.setFixedHeight(22)
+        self.btn_back_to_settings.clicked.connect(self.show_settings_view)
+        self.btn_back_to_settings.setVisible(False)
+        bh.addWidget(self.btn_back_to_settings)
+        root.addWidget(bar)
+
+        self.stack = QStackedWidget()
+        root.addWidget(self.stack, stretch=1)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -809,8 +967,21 @@ class CameraPage(QWidget):
         brh.addWidget(self.btn_reset); brh.addWidget(self.btn_apply)
         bv.addWidget(btn_row); bv.addStretch()
 
-        scroll.setWidget(body); root.addWidget(scroll, stretch=1)
+        scroll.setWidget(body)
+        self.stack.addWidget(scroll)              # index 0: 설정 폼
+
+        self.capture_panel = CaptureTestPanel()
+        self.stack.addWidget(self.capture_panel)  # index 1: 캡쳐 테스트
+
         self._on_cam_changed(self.cam_combo.currentText())
+
+    def show_capture_view(self):
+        self.stack.setCurrentIndex(1)
+        self.btn_back_to_settings.setVisible(True)
+
+    def show_settings_view(self):
+        self.stack.setCurrentIndex(0)
+        self.btn_back_to_settings.setVisible(False)
 
     @staticmethod
     def _row_lbl(text):
@@ -1954,9 +2125,10 @@ class MainWindow(QMainWindow):
         self.sub_bar.tab_changed.connect(self.center.switch_tab)
         self.sub_bar.tab_changed.connect(self._on_tab_changed)
 
-        # Camera 탭 ↔ Run 탭 연동
+        # Camera 탭: 설정 적용 + 캡쳐 테스트
         self.center.cam_page.config_applied.connect(self._on_camera_config_applied)
-        self.center.run_page.btn_cam_test.clicked.connect(self._on_camera_capture)
+        self.center.cam_page.capture_panel.capture_requested.connect(self._on_camera_capture)
+        self.side.capture_test_btn.clicked.connect(self._on_open_capture_test)
 
         # Detection 탭 (RTMDet / ICP 파라미터)
         self.center.detection_page.config_applied.connect(self._on_detection_config_applied)
@@ -2037,11 +2209,12 @@ class MainWindow(QMainWindow):
         self.st_lbl.setText("● 실행 중"); self.st_lbl.setStyleSheet(f"color:{DANGER}; font-size:10px;")
         self.title_bar.set_indicator("RUNNING", True)
         self.log.push(f"파이프라인 시작 (TCP {cfg.tcp_host}:{cfg.tcp_port})", "INFO")
+        self.center.run_page.show_monitor_view()
 
         self.pipeline_runner = PipelineRunner(cfg)
         self.pipeline_runner.log_message.connect(self.log.push)
         self.pipeline_runner.image_ready.connect(self.center.run_page.show_image)
-        self.pipeline_runner.pointcloud_ready.connect(self.center.run_page.show_pointcloud)
+        self.pipeline_runner.frame_started.connect(self.center.run_page.set_processing)
         self.pipeline_runner.result_ready.connect(self._on_pipeline_result)
         self.pipeline_runner.client_status.connect(self._on_pipeline_client_status)
         self.pipeline_runner.error.connect(self._on_pipeline_error)
@@ -2062,6 +2235,7 @@ class MainWindow(QMainWindow):
         self.st_lbl.setText("● 대기 중"); self.st_lbl.setStyleSheet(f"color:{SUCCESS}; font-size:10px;")
         self.title_bar.set_indicator("RUNNING", False)
         self.title_bar.set_indicator("IP", False)
+        self.center.run_page.show_blank_view()
 
     # ── 파이프라인(PipelineRunner) 연동 ───────────────────────────
     def _on_detection_config_applied(self, cfg: dict):
@@ -2072,11 +2246,10 @@ class MainWindow(QMainWindow):
             f"ICP fitness≥{d.get('icp_fitness_threshold')}  device={d.get('device')}", "OK"
         )
 
-    def _on_pipeline_result(self, result: dict):
-        self.center.run_page.show_result(result)
-        cls = result.get("class", "—"); fit = result.get("fitness", "—")
-        fit_s = f"{fit:.4f}" if isinstance(fit, float) else str(fit)
-        self.st_lbl.setText(f"클래스: {cls}  |  fitness: {fit_s}")
+    def _on_pipeline_result(self, info: dict):
+        self.center.run_page.show_result(info)
+        status = info.get("status", "—"); n_ok = info.get("num_icp_ok", "—")
+        self.st_lbl.setText(f"상태: {status}  |  ICP 성공: {n_ok}개")
         self.st_lbl.setStyleSheet(f"color:{TEXT_PRI}; font-size:10px;")
 
     def _on_pipeline_client_status(self, connected: bool, addr: str):
@@ -2103,6 +2276,9 @@ class MainWindow(QMainWindow):
             f"깊이 {cam.get('depth_min_mm')}~{cam.get('depth_max_mm')}mm  "
             f"노출 {cam.get('exposure_us')}μs", "OK"
         )
+
+    def _on_open_capture_test(self):
+        self.center.cam_page.show_capture_view()
 
     def _on_camera_connect(self):
         if self.cam_connected:
@@ -2132,14 +2308,15 @@ class MainWindow(QMainWindow):
             self.log.push(msg, "OK")
             self.side.cam_connect_btn.setEnabled(False)
             self.side.cam_disconnect_btn.setEnabled(True)
-            self.center.run_page.set_connection_state(True)
+            self.center.cam_page.capture_panel.set_connection_state(True)
+            self.center.cam_page.show_capture_view()
             self.title_bar.set_indicator("CAM", True)
         else:
             self.cam_connected = False
             self.log.push(f"카메라 연결 실패: {msg}", "ERR")
             self.side.cam_connect_btn.setEnabled(True)
             self.side.cam_disconnect_btn.setEnabled(False)
-            self.center.run_page.set_connection_state(False)
+            self.center.cam_page.capture_panel.set_connection_state(False)
             self.title_bar.set_indicator("CAM", False)
 
     def _on_camera_disconnect(self):
@@ -2154,16 +2331,16 @@ class MainWindow(QMainWindow):
         self.log.push("카메라 연결 해제됨.", "INFO")
         self.side.cam_connect_btn.setEnabled(True)
         self.side.cam_disconnect_btn.setEnabled(False)
-        self.center.run_page.set_connection_state(False)
+        self.center.cam_page.capture_panel.set_connection_state(False)
         self.title_bar.set_indicator("CAM", False)
 
     def _on_camera_capture(self):
         if not self.cam_connected:
             self.log.push("카메라가 연결되어 있지 않습니다. 먼저 '카메라 연결'을 눌러주세요.", "WARN")
             return
-        run_page = self.center.run_page
-        run_page.btn_cam_test.setEnabled(False)
-        run_page.btn_cam_test.setText("캡쳐 중...")
+        panel = self.center.cam_page.capture_panel
+        panel.btn_capture.setEnabled(False)
+        panel.btn_capture.setText("캡쳐 중...")
         out_dir = os.path.join(BACKEND_ROOT, "data", "captures", "ui_test")
         self.cam_worker.request_capture(out_dir)
 
@@ -2173,18 +2350,18 @@ class MainWindow(QMainWindow):
             f"유효 {data['valid']}/{data['total']}  "
             f"Z {data['z_min']:.0f}~{data['z_max']:.0f}mm", "OK"
         )
-        run_page = self.center.run_page
-        run_page.show_image(data["png"])
-        run_page.show_pointcloud(data["points_mm"])
-        run_page.show_camera_test_stats(data)
-        run_page.btn_cam_test.setEnabled(True)
-        run_page.btn_cam_test.setText("캡쳐 (IR + PCD)")
+        panel = self.center.cam_page.capture_panel
+        panel.show_ir_image(data["png"])
+        panel.show_pointcloud(data["points_mm"])
+        panel.show_capture_stats(data)
+        panel.btn_capture.setEnabled(True)
+        panel.btn_capture.setText("캡쳐 (IR + PCD)")
 
     def _on_camera_error(self, msg: str):
         self.log.push(f"카메라 오류: {msg}", "ERR")
-        run_page = self.center.run_page
-        run_page.btn_cam_test.setEnabled(self.cam_connected)
-        run_page.btn_cam_test.setText("캡쳐 (IR + PCD)")
+        panel = self.center.cam_page.capture_panel
+        panel.btn_capture.setEnabled(self.cam_connected)
+        panel.btn_capture.setText("캡쳐 (IR + PCD)")
 
     def on_image(self, path: str):   self.center.show_image(path)
     def on_result(self, result: dict):

@@ -111,7 +111,8 @@ class PipelineRunner(QThread):
     log_message      = pyqtSignal(str, str)     # (msg, level)
     image_ready      = pyqtSignal(str)          # overlay PNG 경로
     pointcloud_ready = pyqtSignal(object)        # (N,3) float ndarray, mm
-    result_ready     = pyqtSignal(dict)          # RunPage.show_result() 호환 dict
+    frame_started    = pyqtSignal(int)           # frame_idx — 캡처 시작 시 emit ("Processing" 표시용)
+    result_ready     = pyqtSignal(dict)          # 모니터 패널용 상세 info dict (아래 _process_one_frame 참고)
     client_status    = pyqtSignal(bool, str)     # (연결됨?, 주소)
     error            = pyqtSignal(str)
     finished_ok      = pyqtSignal()
@@ -264,19 +265,42 @@ class PipelineRunner(QThread):
     # 한 프레임 처리: 캡처 → Detection → ICP → 픽포인트 → 응답 조립
     # ══════════════════════════════════════════════════════════
     def _process_one_frame(self, cam, inferencer, cad_pcd, cad_down, o3d, cv2):
+        import time as _time
         cfg = self.cfg
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log(f"[frame_{self._frame_idx:04d}] 캡처 중... {now}")
+        self.frame_started.emit(self._frame_idx)
 
+        t0 = _time.perf_counter()
         frame = cam.capture()
+        capture_ms = (_time.perf_counter() - t0) * 1000.0
+
         gray = frame.intensity
         pcd_organized = frame.points_organized.astype(np.float32)
         valid_mask = frame.valid_mask.astype(bool)
         bgr = np.stack([gray, gray, gray], axis=-1)
 
+        valid_cnt = int(valid_mask.sum()); total = valid_mask.size
+        valid_ratio = 100.0 * valid_cnt / total if total else 0.0
+        pts_all = frame.points
+        if pts_all.size:
+            z_min, z_max = float(pts_all[:, 2].min()), float(pts_all[:, 2].max())
+        else:
+            z_min = z_max = float("nan")
+
+        info_base = {
+            "frame_idx": self._frame_idx,
+            "timestamp": now,
+            "capture_ms": capture_ms,
+            "valid_ratio": valid_ratio,
+            "z_min": z_min, "z_max": z_max,
+        }
+
         # ── Detection ────────────────────────────────────────────
+        t0 = _time.perf_counter()
         results = inferencer.infer(bgr)
         results, nms_removed = self._mask_nms(results, cfg.mask_iou_threshold)
+        det_ms = (_time.perf_counter() - t0) * 1000.0
         for rem, winner, iou in nms_removed:
             self._log(f"  [NMS] score={rem.score:.2f} 제거 (IoU={iou:.2f})")
         self._log(f"검출: {len(results)}개")
@@ -290,14 +314,16 @@ class PipelineRunner(QThread):
         if not results:
             overlay_path = out_dir / f"{frame_name}_overlay.png"
             cv2.imwrite(str(overlay_path), overlay)
-            summary = {"class": "—", "score": "—", "fitness": "—", "tcp": [], "num_objects": 0}
+            info = {**info_base, "status": "No detection", "det_ms": det_ms, "icp_ms": 0.0,
+                    "num_detected": 0, "num_icp_ok": 0, "picks": []}
             return {"status": "No"}, {
                 "overlay_path": str(overlay_path),
                 "points_mm": frame.points if frame.points.size else None,
-                "result_summary": summary,
+                "result_summary": info,
             }
 
         # ── 인스턴스별 ICP 정합 ───────────────────────────────────
+        t0 = _time.perf_counter()
         icp_results = []   # [(DetectionResult, icp_result_dict)]
         picks_2d = []      # overlay 텍스트용
 
@@ -322,6 +348,8 @@ class PipelineRunner(QThread):
             cy = float((r.bbox[1] + r.bbox[3]) / 2)
             picks_2d.append((cx, cy, pick, fit, r.bbox))
 
+        icp_ms = (_time.perf_counter() - t0) * 1000.0
+
         overlay_final = self._draw_picks_on_overlay(overlay, picks_2d, cv2) if picks_2d else overlay
         overlay_path = out_dir / f"{frame_name}_overlay.png"
         cv2.imwrite(str(overlay_path), overlay_final)
@@ -339,11 +367,12 @@ class PipelineRunner(QThread):
             }, f, indent=2, ensure_ascii=False)
 
         if not icp_results:
-            summary = {"class": "—", "score": "—", "fitness": "—", "tcp": [], "num_objects": 0}
+            info = {**info_base, "status": "No detection", "det_ms": det_ms, "icp_ms": icp_ms,
+                    "num_detected": len(results), "num_icp_ok": 0, "picks": []}
             return {"status": "No"}, {
                 "overlay_path": str(overlay_path),
                 "points_mm": frame.points if frame.points.size else None,
-                "result_summary": summary,
+                "result_summary": info,
             }
 
         # ── 응답 조립 (fitness 높은 순 정렬 → 로봇에는 전부 전달) ──
@@ -352,31 +381,23 @@ class PipelineRunner(QThread):
             "position_mm": info["pick_point"]["position_mm"],
             "approach_deg": info["pick_point"]["approach_deg"],
             "icp_fitness": info["icp_fitness"],
-        } for _, info in icp_results]
+            "class_name": r.class_name,
+            "score": r.score,
+        } for r, info in icp_results]
 
-        best_r, best_info = icp_results[0]
-        best_pos = best_info["pick_point"]["position_mm"]
-        best_deg = best_info["pick_point"]["approach_deg"]
-        summary = {
-            "class": best_r.class_name,
-            "score": best_r.score,
-            "fitness": best_info["icp_fitness"],
-            "tcp": [
-                best_pos[0], best_pos[1], best_pos[2],
-                best_deg["roll_deg"], best_deg["pitch_deg"], best_deg["yaw_deg"],
-            ],
-            "num_objects": len(picks),
-        }
-
+        best_pos = picks[0]["position_mm"]
         self._log(
             f"픽포인트: ({best_pos[0]:.1f}, {best_pos[1]:.1f}, {best_pos[2]:.1f}) mm  "
-            f"fit={best_info['icp_fitness']:.3f}  (총 {len(picks)}개 중 최상)", "OK"
+            f"fit={picks[0]['icp_fitness']:.3f}  (총 {len(picks)}개 중 최상)", "OK"
         )
+
+        info = {**info_base, "status": "Done", "det_ms": det_ms, "icp_ms": icp_ms,
+                "num_detected": len(results), "num_icp_ok": len(icp_results), "picks": picks}
 
         return {"status": "ok", "picks": picks}, {
             "overlay_path": str(overlay_path),
             "points_mm": frame.points if frame.points.size else None,
-            "result_summary": summary,
+            "result_summary": info,
         }
 
     # ══════════════════════════════════════════════════════════
